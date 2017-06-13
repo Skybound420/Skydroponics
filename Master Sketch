@@ -14,7 +14,7 @@
 #include <BlynkSimpleEthernet.h>    // Used by Blynk
 #include <Wire.h>                   // I2c
 #include "DHT.h"                    // DHT data wire connected to I/O pin with a 10k pullup resistor to 5V               
-#include <SimpleTimer.h>            // used to run functions at preset millis based intervals
+#include <BlynkTimer.h>             // used to run functions at preset millis based intervals
 #include "RTClib.h"                 // RealTimeClock Library for DS1307 and DS3231
 #define BLYNK_PRINT Serial
 //  DHT Reference Values - CHANGE THESE TO MANAGE YOUR ROOM'S CLIMATE - //
