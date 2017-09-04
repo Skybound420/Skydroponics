@@ -1,22 +1,32 @@
 /*
-   This code is a functional hydroponics controller.  Sensors are measured, preset values are
-   executed and devices are turned on and off.  The sensors are an internal clock (RTC),
-   atmospheric temperature and humidity sensors (DHT22) and the users smartphone (w/Blynk).
-   Water quality sensors are also on the wishlist, but this will be added in later.  The example code
-   is already written for these other circuits.
-   For more info see; https://www.atlas-scientific.com/
-   The devices consist of lights, fans, dehumidifiers, water pumps, water valves and
-   nutrient dosing pumps.  All of the sensors dictate the usage of each device and the program combined
-   with Blynk extends the gardener's capability in the garden exponentially!
+ _____ _              _                             _          
+/  ___| |            | |                           (_)         
+\ `--.| | ___   _  __| |_ __ ___  _ __   ___  _ __  _  ___ ___ 
+ `--. \ |/ / | | |/ _` | '__/ _ \| '_ \ / _ \| '_ \| |/ __/ __|
+/\__/ /   <| |_| | (_| | | | (_) | |_) | (_) | | | | | (__\__ \
+\____/|_|\_\\__, |\__,_|_|  \___/| .__/ \___/|_| |_|_|\___|___/
+             __/ |               | |                           
+            |___/                |_|   (image; Latitude17)                        
 */
-#include <SPI.h>                    // Used by Blynk
-#include <Ethernet.h>               // Used by Blynk
-#include <BlynkSimpleEthernet.h>    // Used by Blynk
-#include <Wire.h>                   // I2c
-#include "DHT.h"                    // DHT data wire connected to I/O pin with a 10k pullup resistor to 5V               
-#include <BlynkTimer.h>             // used to run functions at preset millis based intervals
-#include "RTClib.h"                 // RealTimeClock Library for DS1307 and DS3231
+//#include <UIPEthernet.h>            // Used by Blynk for ENC28J60 Ethernet Adapter
+//#include <BlynkSimpleUIPEthernet.h> // Used by Blynk for ENC28J60 Ethernet Adapter
+#include <BlynkSimpleEthernet.h>    // Used by Blynk for Wiznet W5100
+#include <WidgetRTC.h>
+#include <DHT.h>                    // DHT data wire connected to I/O pin with a 10k pullup resistor to 5V
+#include <RTClib.h>                 // RealTimeClock Library for DS1307 and DS3231
 #define BLYNK_PRINT Serial
+
+char auth[] = "AUTH";
+unsigned int port = 8442;
+byte arduino_mac[] = { 0xDE, 0xED, 0xBA, 0xFE, 0xFE, 0xED };    //DE:ED:BA:FE:FE:ED
+char server[] =    "blynk-cloud.com"; // can use "blynk-cloud.com" or an IP address
+IPAddress arduino_ip ( 10,   0,   0,  120);
+IPAddress dns_ip     (  10,   0,   0,   1);
+IPAddress gateway_ip ( 10,   0,   0,   1);
+IPAddress subnet_mask(255, 255, 255,   0);
+unsigned int blynkInterval = 7000;  // 25.0s Check Server Frequency      (CSF)
+unsigned int Timeout = 5000;
+
 //  DHT Reference Values - CHANGE THESE TO MANAGE YOUR ROOM'S CLIMATE - //
 byte hiMaxTemp = 80;   // temp that triggers heat removal device(s) on
 byte lowMaxTemp = 70;  // temp that triggers heat removal device(s) off
@@ -31,7 +41,7 @@ int dosingLEDs[8]  = { V14, V15, V16, V17, V18, V19, V20, V21 };
 uint32_t multiplier[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }; //ms per ml
 uint32_t startPump = 0;
 uint32_t runCount;
-bool pumpRunning = false;
+bool pumpRunning;
 const char *nuteType[8] = { "GH Armor Si", "GH Flora Blend", "GH CALiMAGic", "GH Kool Bloom",
                             "GH Flora Gro", "GH Flora Micro", "GH Flora Bloom", "GH pH Down"
                           }; //Text Printed to Terminal Widget^^
@@ -60,6 +70,7 @@ uint32_t countGallons;
 boolean runningRO = false;
 int pumpAon;          //Blynk Override to turn pumpA back on
 int pumpBon;          //Blynk Override to turn pumpB back on
+
 int ROpumpOn = 0;     //Blynk Triggered RO Pump
 float totalGallons;   //Number of RO Gallons Selected in Widget
 BLYNK_WRITE(V9) {
@@ -83,8 +94,8 @@ BLYNK_WRITE(V12) {
 #define pumpB 25              //Relay 4/d  
 #define ROpump 26             //Relay 5/e  
 #define scrubberFan 27        //Relay 6/f  
-#define heatVentA 28          //Relay 7/g  
-#define heatVentB 29          //Relay 8/h 
+#define VentA 28              //Relay 7/g  
+#define VentB 29              //Relay 8/h 
 
 //-Digital Pins - 8 Channel Relay Assignments - 30 Series Pins - 120VAC~ switching
 // -Dpins 30-37 are reserved for another bank of Relays.
@@ -92,134 +103,76 @@ BLYNK_WRITE(V12) {
 //Digital Pin Valves Assignments - 40 Series Pins - Hi/Lo Solenoid Valves
 //const byte valve[13] = { 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52 };
 
-#define TURN_ON 0 // TURN_ON and TURN_OFF are defined to account for Active LOW relays
-#define TURN_OFF 1 // Used to switch relay states for on/off of 120VAC~ devices  
+#define TURN_ON LOW // TURN_ON and TURN_OFF are defined to account for Active LOW relays
+#define TURN_OFF HIGH // Used to switch relay states for on/off of 120VAC~ devices  
 
 RTC_DS1307 RTC;
-float UTCOffset = -5.0;    // Your timezone relative to UTC (http://en.wikipedia.org/wiki/UTC_offset)
-char auth[] = "AuthKey";
+
 WidgetLCD lcdA(V7);  //Set LCD widget to Advanced Mode - Widget to display project clock
 WidgetTerminal terminal(V8);
 DHT dhtA(A0, DHT22);     // DHT instance named dhtA, (I/O pin, sensor type)
 DHT dhtB(A2, DHT22);     // DHT instance named dhtB, (I/O pin, sensor type)
-SimpleTimer timer;       // SimpleTimer instance named timer
+BlynkTimer timer;       // SimpleTimer instance named timer
+WidgetRTC rtcWidget;  // requires RTC widget in app
 
-void setup()
+#define W5100_CS  10
+//#define SDCARD_CS 4
+
+//**********************Functions***************************//
+//**********************************************************//
+// This is called for all virtual pins that do not have BLYNK_WRITE handler
+BLYNK_WRITE_DEFAULT()
 {
-  Serial.begin(9600);
-  //Serial2.begin() // For other baud rates
-  //Serial3.begin() // For other baud rates
-  Blynk.begin(auth);
-  dhtA.begin();
-  dhtB.begin();
-  pinMode(A0, INPUT_PULLUP);    // DHT22 use internal 20k pullup resistors
-  pinMode(A2, INPUT_PULLUP);
-  Wire.begin();
-  RTC.begin();
-  //RTC.adjust(DateTime(__DATE__, __TIME__));
-  //Uncomment "RTC.adjust" the first time this sketch is uploaded to program the RTC.
-  //Once done, re-comment that line out, and upload this sketch again.
-
-  for (int allRelays = lightA; allRelays <= heatVentB; allRelays++) {
-    pinMode(allRelays, OUTPUT);
-    digitalWrite(allRelays, TURN_OFF);
-  }
-  for (int p = 0; p <= 7; p++)
-  {
-    pinMode(pumpPin[p], OUTPUT);
-  }
-  Blynk.virtualWrite(V4, 0);
-  Blynk.virtualWrite(V5, 0);
-  Blynk.virtualWrite(V6, 0);
-  Blynk.virtualWrite(V9, 0);
-  Blynk.virtualWrite(V10, 0);
-  Blynk.virtualWrite(V11, 0);
-  Blynk.virtualWrite(V12, 0);
-  Blynk.virtualWrite(V13, 0);
-  Blynk.virtualWrite(V14, 0);
-  Blynk.virtualWrite(V15, 0);
-  Blynk.virtualWrite(V16, 0);
-  Blynk.virtualWrite(V17, 0);
-  Blynk.virtualWrite(V18, 0);
-  Blynk.virtualWrite(V19, 0);
-  Blynk.virtualWrite(V20, 0);
-  Blynk.virtualWrite(V21, 0);
-  while (Blynk.connect() == false) {}
-  timer.setInterval(2000L, timeRoutine);      // 2 second intervals between timed routiness
-  timer.setInterval(5001L, climateRoutine);   // 5 second intervals between climate routines
-  timer.setInterval(207L, dosingPumps);       // 0.2 second interval to maintain accuracy (+/- .25)
-  timer.setInterval(1003L, ROcheck);          // 1 second interval between RO pump routines
-}
-
-void loop()
-{
-  Blynk.run();
-  timer.run();
-}
-
-//Functions
-void climateRoutine()
-{
-  byte h1 = dhtA.readHumidity();          // f1 and h1 are fahrenheit and humidity readings
-  byte f1 = dhtA.readTemperature(true);   // from DHT/A
-  byte h2 = dhtB.readHumidity();          // f2 and h2 are fahrenheit and humidity readings
-  byte f2 = dhtB.readTemperature(true);   // from DHT/B
-  if (isnan(f1) || isnan(f2) || isnan(h1) || isnan(h2)) {
-    terminal.println("Failed to read from a DHT sensor");
-    terminal.flush();
-    return;
-  }
-  Blynk.virtualWrite(V0, f1);      //  Set Virtual Pin 0 frequency to PUSH in Blynk app
-  Blynk.virtualWrite(V1, h1);      //  Set Virtual Pin 1 frequency to PUSH in Blynk app
-  Blynk.virtualWrite(V2, f2);      //  Set Virtual Pin 2 frequency to PUSH in Blynk app
-  Blynk.virtualWrite(V3, h2);      //  Set Virtual Pin 3 frequency to PUSH in Blynk app
-  //-------------------Bloom A Temp Test---------------------------------------//
-  if (f1 >= hiMaxTemp)  //if "f1" is greater than or equal to hiMaxTemp,
-  {
-    digitalWrite(heatVentA, TURN_ON);  // TURN_ON heatVentA (fan).
-    terminal.println("Exhausting the heat from Bloom A"); //  Text printed to terminal monitor
-  }
-
-  else if (f1 <= lowMaxTemp)  //  or else if "f1" is less than or equal to lowMaxTemp
-  {
-    digitalWrite(heatVentA, TURN_OFF); //  TURN_OFF relay E.
-  }
-  //-----------------------Bloom A Humidity Test-------------------------//
-  if (h1 >= hiHum)  //if "h2" is greater than or equal to hiHum,
-  {
-    digitalWrite(scrubberFan, TURN_ON);  // TURN_ON heatVentA (fan).
-    terminal.println("Exhausting the RH from Bloom A"); //  Text printed to terminal monitor
-  }
-  else if (h1 <= lowHum)  //  or else if "h1" is less than or equal to lowHum
-  {
-    digitalWrite(scrubberFan, TURN_OFF);
-  }
-  //-----------------------Bloom B Temp Test-----------------------------//
-  if (f2 >= hiMaxTemp)  //if "f2" is greater than or equal to hiMaxTemp,
-  {
-    digitalWrite(heatVentB, TURN_ON);  // TURN_ON heatVentA (fan).
-    terminal.println("Exhausting the heat from Bloom B"); //  Text printed to terminal monitor
-  }
-  else if (f2 <= lowMaxTemp)  //  or else if "f2" is less than or equal to lowMaxTemp
-  {
-    digitalWrite(heatVentB, TURN_OFF);
-  }
-  //-----------------------Bloom B Humidity Test-------------------------//
-  if (h2 >= hiHum)  //if "h2" is greater than or equal to hiHum,
-  {
-    digitalWrite(scrubberFan, TURN_ON);  // TURN_ON heatVentA (fan).
-    terminal.println("Exhausting the RH from Bloom B"); //  Text printed to terminal monitor
-  }
-  else if (h2 <= lowHum)  //  or else if "h2" is less than or equal to lowHum
-  {
-    digitalWrite(scrubberFan, TURN_OFF);
+  terminal.print("BLYNK_WRITE for pin ");
+  terminal.print(request.pin);
+  terminal.println(" not defined.");
+  terminal.println("Values: ");
+  for (auto i = param.begin(); i < param.end(); ++i) {
+    terminal.print("* ");
+    terminal.println(i.asString());
   }
   terminal.flush();
 }
 
-void timeRoutine()
+// This is called for all virtual pins that do not have BLYNK_READ handler
+BLYNK_READ_DEFAULT()
+{
+  terminal.print("BLYNK_READ for pin ");
+  terminal.print(request.pin);
+  terminal.println(" not defined.");
+  terminal.flush();
+}
+
+// This is called when Blynk has successfully connected
+BLYNK_CONNECTED()
+{
+  Serial.println("BLYNK_CONNECTED");
+  rtcWidget.begin();      // Synchronize with widget (server) time on connection
+  setSyncInterval(5 * 60); // subsequent time sync interval in seconds (5 minutes)
+
+  for (int i = V4; i <= V6; i++)
+    for (int j = V9; j <= V21; j++)
+    {
+      Blynk.virtualWrite(i, j, 0);
+    }
+}
+
+void checkBlynk() {
+  unsigned long startConnecting = millis();
+  while (!Blynk.connected())
+  {
+    Blynk.connect();
+    if (millis() > startConnecting + Timeout)
+    {
+      break;
+    }
+  }
+}
+
+void displayDateTime()
 {
   DateTime now = RTC.now();          // reads time at beginning of loop
+  byte HOUR = now.hour();
   byte twelveHour = now.hour() - 12; // Variable used to display 13+ hours in 12 hour format
   byte zeroHour = 12;                // Variable use to convert "0" zero hour to display it as 12:00+
   byte displayHour;
@@ -242,13 +195,102 @@ void timeRoutine()
     displayHour = now.hour();
     meridian = "AM";
   }
-  //Set LCD Widget to Advanced Mode
-  char stamp[16];
-  lcdA.clear();
-  sprintf(stamp, "%02d:%02d:%02d-%02s", displayHour, MIN, SEC, meridian);
-  lcdA.print(3, 0, stamp);
-  sprintf(stamp, "%02d/%02d/%04d", now.month(), now.day(), now.year());
-  lcdA.print(3, 1, stamp);
+  if (Blynk.connected())
+  {
+    char stamp[16];
+    lcdA.clear();
+    sprintf(stamp, "%02d:%02d:%02d-%02s", displayHour, MIN, SEC, meridian);
+    lcdA.print(3, 0, stamp);
+    sprintf(stamp, "%02d/%02d/%04d", now.month(), now.day(), now.year());
+    lcdA.print(3, 1, stamp);
+  }
+}
+// synchronize the RTC hardware device with our server provided date/time values
+void syncRTCHardware()
+{
+  if (!Blynk.connected())
+  {
+    return;
+  }
+  DateTime now = RTC.now();          // reads time at beginning of loop
+
+  // time library is synchronized by the Blynk WidgetRTC
+  if (Blynk.connected())
+  {
+    bool syncClocks;
+    if (now.hour() != hour() || now.minute() != minute()) syncClocks = true;
+    if (syncClocks == true)
+    {
+      syncClocks = false;
+      Serial.println("Resynching RTC Time...");
+      terminal.println("Resynching RTC Time...");
+      RTC.adjust(DateTime(year(), month(), day(), hour(), minute(), second()));
+      terminal.flush();
+    }
+  }
+}
+
+void climateRoutine()
+{
+  byte h1 = dhtA.readHumidity();          // f1 and h1 are fahrenheit and humidity readings
+  byte f1 = dhtA.readTemperature(true);   // from DHT/A
+  byte h2 = dhtB.readHumidity();          // f2 and h2 are fahrenheit and humidity readings
+  byte f2 = dhtB.readTemperature(true);   // from DHT/B
+  if (isnan(f1) || isnan(f2) || isnan(h1) || isnan(h2)) {
+    terminal.println("Failed to read from a DHT sensor");
+    terminal.flush();
+    return;
+  }
+  Blynk.virtualWrite(V0, f1);      //  Set Virtual Pin 0 frequency to PUSH in Blynk app
+  Blynk.virtualWrite(V1, h1);      //  Set Virtual Pin 1 frequency to PUSH in Blynk app
+  Blynk.virtualWrite(V2, f2);      //  Set Virtual Pin 2 frequency to PUSH in Blynk app
+  Blynk.virtualWrite(V3, h2);      //  Set Virtual Pin 3 frequency to PUSH in Blynk app
+  //-------------------Bloom A Temp Test---------------------------------------//
+  if (f1 >= hiMaxTemp)  //if "f1" is greater than or equal to hiMaxTemp,
+  {
+    digitalWrite(VentA, TURN_ON);  // TURN_ON heatVentA (fan).
+    terminal.println("Exhausting the heat from Bloom A"); //  Text printed to terminal monitor
+  }
+  else if (f1 <= lowMaxTemp)  //  or else if "f1" is less than or equal to lowMaxTemp
+  {
+    digitalWrite(VentA, TURN_OFF); //  TURN_OFF relay E.
+  }
+  //-----------------------Bloom A Humidity Test-------------------------//
+  if (h1 >= hiHum)  //if "h2" is greater than or equal to hiHum,
+  {
+    digitalWrite(VentA, TURN_ON);  // TURN_ON heatVentA (fan).
+    terminal.println("Exhausting the RH from Bloom A"); //  Text printed to terminal monitor
+  }
+  else if (h1 <= lowHum)  //  or else if "h1" is less than or equal to lowHum
+  {
+    digitalWrite(VentA, TURN_OFF);
+  }
+  //-----------------------Bloom B Temp Test-----------------------------//
+  if (f2 >= hiMaxTemp)  //if "f2" is greater than or equal to hiMaxTemp,
+  {
+    digitalWrite(VentB, TURN_ON);  // TURN_ON heatVentA (fan).
+    terminal.println("Exhausting the heat from Bloom B"); //  Text printed to terminal monitor
+  }
+  else if (f2 <= lowMaxTemp)  //  or else if "f2" is less than or equal to lowMaxTemp
+  {
+    digitalWrite(VentB, TURN_OFF);
+  }
+  //-----------------------Bloom B Humidity Test-------------------------//
+  if (h2 >= hiHum)  //if "h2" is greater than or equal to hiHum,
+  {
+    digitalWrite(scrubberFan, TURN_ON);  // TURN_ON heatVentA (fan).
+    terminal.println("Exhausting the RH from Bloom B"); //  Text printed to terminal monitor
+  }
+  else if (h2 <= lowHum)  //  or else if "h2" is less than or equal to lowHum
+  {
+    digitalWrite(scrubberFan, TURN_OFF);
+  }
+  terminal.flush();
+}
+
+void timeRoutine()
+{
+  DateTime now = RTC.now();          // reads time at beginning of loop
 
   //------------------12/12 BloomA Light - 5AM-5PM
   //Adjust hours and minutes in accordance with 24 hour time format.
@@ -325,7 +367,7 @@ void ROcheck()  //RO Pump = 34 seconds on time per gallon
   if (ROpumpOn == 1 && runningRO == false)            // Activates when Blynk button is toggled
   {
     digitalWrite(ROpump, TURN_ON);
-    Blynk.virtualWrite(V22, 255);                     // Illuminates Blynk indicator LED
+    Blynk.virtualWrite(V11, 1);                     // Illuminates Blynk button widget
     runningRO = true;
     ROstart = millis();
     countGallons = msPerGallon * totalGallons;        // Calculates length of runtime for pump
@@ -340,7 +382,7 @@ void ROcheck()  //RO Pump = 34 seconds on time per gallon
     runningRO = false;
     digitalWrite(ROpump, TURN_OFF);
     Blynk.virtualWrite(V11, 0);
-    Blynk.virtualWrite(V22, 0);
+    //Blynk.virtualWrite(V22, 0);
   }
   terminal.flush();
 }
@@ -371,4 +413,49 @@ void dosingPumps()
     button = 0;
   }
   terminal.flush();
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  dhtA.begin();
+  dhtB.begin();
+  pinMode(A0, INPUT_PULLUP);    // DHT22 use internal 20k pullup resistors
+  pinMode(A2, INPUT_PULLUP);
+  RTC.begin();
+
+  for (int allRelays = lightA; allRelays <= VentB; allRelays++)
+  {
+    pinMode(allRelays, OUTPUT);
+    digitalWrite(allRelays, TURN_OFF);
+  }
+
+  for (int p = 0; p <= 7; p++)
+  {
+    pinMode(pumpPin[p], OUTPUT);
+  }
+
+  timer.setInterval(2000L, timeRoutine);      // 2 second intervals between timed routiness
+  timer.setInterval(5001L, climateRoutine);   // 5 second intervals between climate routines
+  timer.setInterval(3600000L, syncRTCHardware);  // synchronize the RTC device with the server time every hour
+  timer.setInterval(1000L, displayDateTime);   // update the LCD Widget every 5 seconds
+  timer.setInterval(1007L, dosingPumps);       // 0.2 second interval to maintain accuracy (+/- .25)
+  timer.setInterval(1003L, ROcheck);          // 1 second interval between RO pump routines
+  timer.setInterval(blynkInterval, checkBlynk);   // check connection to server per blynkInterval
+
+  Ethernet.begin(arduino_mac, arduino_ip, dns_ip, gateway_ip, subnet_mask );
+  Blynk.config(auth, server, port);  // this is OK
+  Blynk.connect();             // this is OK
+
+  Serial.println("setup complete.");
+}
+
+void loop()
+{
+  // only attempt Blynk-related functions when connected to Blynk
+  if (Blynk.connected())
+  {
+    Blynk.run();
+  }
+  timer.run();
 }
