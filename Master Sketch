@@ -120,6 +120,19 @@ WidgetRTC rtcWidget;  // requires RTC widget in app
 
 //**********************Functions***************************//
 //**********************************************************//
+void checkMemory()
+{
+    #ifdef BLYNK_PRINT
+    Serial.print("[_\\|/_] SRAM: "); 
+    // BlynkFreeRam() wraps the ESP.getfreeheap() or comparable functions for other non-ESP Arduinos
+    // if 0, support hasn't been implemented for your specific device
+    // see https://github.com/blynkkk/blynk-library/blob/master/src/utility/BlynkDebug.cpp
+    Serial.println(BlynkFreeRam());
+    #endif
+    int freeRam = BlynkFreeRam();
+    Blynk.virtualWrite(V0, freeRam);
+}
+
 // This is called for all virtual pins that do not have BLYNK_WRITE handler
 BLYNK_WRITE_DEFAULT()
 {
@@ -435,6 +448,7 @@ void setup()
     pinMode(pumpPin[p], OUTPUT);
   }
 
+  timer.setInterval(5000L, checkMemory);
   timer.setInterval(2000L, timeRoutine);      // 2 second intervals between timed routiness
   timer.setInterval(5001L, climateRoutine);   // 5 second intervals between climate routines
   timer.setInterval(3600000L, syncRTCHardware);  // synchronize the RTC device with the server time every hour
