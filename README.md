@@ -8,8 +8,11 @@ GUI: Android Smartphone
 Skydro Virtual Pins
 
 V0 - Value Display (Temp1)(PUSH)
+
 V1 - Value Display (Humidity1)(PUSH)
+
 V2 - Value Display (Temp2)(PUSH)
+
 V3 - Value Display (Humidity2)(PUSH)
 
 V4 - Menu (Dosing Pump Select)
