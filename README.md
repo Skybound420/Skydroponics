@@ -7,10 +7,10 @@ GUI: Android Smartphone
 
 Skydro Virtual Pins
 
-V0 - Value Display (Temp1)
-V1 - Value Display (Humidity1)
-V2 - Value Display (Temp2)
-V3 - Value Display (Humidity2)
+V0 - Value Display (Temp1)(PUSH)
+V1 - Value Display (Humidity1)(PUSH)
+V2 - Value Display (Temp2)(PUSH)
+V3 - Value Display (Humidity2)(PUSH)
 
 V4 - Menu (Dosing Pump Select)
 V5 - Step V (Dosing Pump Volume)
@@ -34,4 +34,4 @@ V19 - LED6
 V20 - LED7
 V21 - LED8
 
-V22 - RO Indicator LED
+V22 - Level H (Mem Usage)(PUSH)
